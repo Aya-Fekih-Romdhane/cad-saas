@@ -1,0 +1,31 @@
+name: CD — Deploy to Production
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_KEY }}
+          script: |
+            cd /opt/cadsaas
+            git pull origin main
+            echo "CLAUDE_API_KEY=${{ secrets.CLAUDE_API_KEY }}" > .env
+            echo "JWT_SECRET=${{ secrets.JWT_SECRET }}" >> .env
+            docker compose pull
+            docker compose up -d --remove-orphans
+            docker image prune -f
+            echo "Deployment complete"

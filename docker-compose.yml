@@ -1,0 +1,134 @@
+version: '3.9'
+
+services:
+  # ──────────────────────────────────────────────
+  # PostgreSQL
+  # ──────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: cadsaas-postgres
+    environment:
+      POSTGRES_DB: cadsaas
+      POSTGRES_USER: cadsaas
+      POSTGRES_PASSWORD: cadsaas_secret
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cadsaas"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - cadsaas-net
+
+  # ──────────────────────────────────────────────
+  # Redis
+  # ──────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: cadsaas-redis
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    networks:
+      - cadsaas-net
+
+  # ──────────────────────────────────────────────
+  # Spring Boot Backend
+  # ──────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: cadsaas-backend
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: cadsaas
+      DB_USER: cadsaas
+      DB_PASSWORD: cadsaas_secret
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      JWT_SECRET: ${JWT_SECRET:-your-256-bit-secret-key-change-in-production-please}
+      CLAUDE_API_KEY: ${CLAUDE_API_KEY}
+      CAD_SERVICE_URL: http://cad-service:8090
+      FRONTEND_URL: http://localhost
+      UPLOAD_DIR: /app/uploads
+    volumes:
+      - uploads_data:/app/uploads
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks:
+      - cadsaas-net
+
+  # ──────────────────────────────────────────────
+  # Python CAD Service
+  # ──────────────────────────────────────────────
+  cad-service:
+    build:
+      context: ./cad-service
+      dockerfile: Dockerfile
+    container_name: cadsaas-cad-service
+    environment:
+      REDIS_URL: redis://redis:6379
+      OUTPUT_DIR: /app/outputs
+      LOG_LEVEL: INFO
+    volumes:
+      - cad_outputs:/app/outputs
+    ports:
+      - "8090:8090"
+    depends_on:
+      - redis
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8090/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - cadsaas-net
+
+  # ──────────────────────────────────────────────
+  # Angular Frontend (Nginx)
+  # ──────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: cadsaas-frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    networks:
+      - cadsaas-net
+
+volumes:
+  postgres_data:
+  redis_data:
+  uploads_data:
+  cad_outputs:
+
+networks:
+  cadsaas-net:
+    driver: bridge
